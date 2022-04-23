@@ -1,0 +1,12 @@
+[package]
+name = "project"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+ecies = "0.2.2"
+libsecp256k1 = "0.7.0"
+rand = "0.8.5"
+openssl = "0.10.38"
