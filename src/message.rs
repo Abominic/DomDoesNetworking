@@ -46,15 +46,15 @@ pub trait Messageable {
     fn get_header_id(&self) -> u16;
     fn write_out<T: Write>(&self, stream: &mut T) -> Result<(), MessageError>;
     fn read_into<T: Read>(stream: &mut T) -> Result<Self, MessageError> where Self: Sized;
-}
 
-#[warn(unused_must_use)]
-pub fn write_all<T, V: Write>(message: T, stream: &mut V) -> Result<(), MessageError> where T: Messageable{
-    let header_bytes = message.get_header_id().to_be_bytes();
-    stream.write(&header_bytes).wrap_me()?;
-    message.write_out(stream)?;
+    #[warn(unused_must_use)]
+    fn write_all<V: Write>(&self, stream: &mut V) -> Result<(), MessageError>{
+        let header_bytes = self.get_header_id().to_be_bytes();
+        stream.write(&header_bytes).wrap_me()?;
+        self.write_out(stream)?;
 
-    Ok(())
+        Ok(())
+    }
 }
 
 pub struct IntroMessage;

@@ -3,12 +3,14 @@ use ecies::{utils::generate_keypair, SecretKey, PublicKey, encrypt, decrypt};
 use openssl::{sha::{sha256}, symm::{Cipher, Crypter}, error::ErrorStack};
 use rand::{RngCore, prelude::ThreadRng, Rng};
 use libsecp256k1::{sign, verify};
-use crate::{message::{Messageable, IntroMessage, message_types::{self, CONFIRMATION}, KeyMessage, TestMessage, ConfirmationMessage, MessageError, CapabilityPrimer, Capability, write_all, SecretKeyMessage, MessageRequest, WrapMessageError, MessageResponse, MessageChunk}};
+use crate::{message::{Messageable, IntroMessage, message_types, KeyMessage, TestMessage, ConfirmationMessage, MessageError, CapabilityPrimer, Capability, SecretKeyMessage, MessageRequest, WrapMessageError, MessageResponse, MessageChunk}};
 type KeyPair = (SecretKey, PublicKey);
 
-//Encryption Capabilities. In order of increasing priority. One from each to be picked.
-const SUPPORTED_PKCRYPT: [&str; 1] = ["secp256k1"]; //This is unofficial. One will be picked.
-const SUPPORTED_SKCRYPT:[&str; 1] = ["aes-256-ctr"]; 
+//Encryption Capabilities. At the moment I am only supporting one algorithm for each task.
+const PKCRYPT_ALGO: &str = "secp256k1";
+const SKCRYPT_ALGO: &str = "aes-256-ctr"; 
+const HASHING_ALGO: &str = "sha256";
+
 //Messaging Capabilities. 
 const SUPPORTED_MSG: [&str; 1] = ["text"];
 const MAX_CHUNK_SIZE:usize = 65535;
@@ -51,7 +53,7 @@ impl Connection {
     fn negotiate_bob(mut conn: TcpStream, kp: KeyPair) -> Result<Self, NegotiationError>{
         let mut rng = rand::thread_rng();
 
-        write_all(IntroMessage, &mut conn).wrap_neg()?; //Send intro message first
+        IntroMessage{}.write_all(&mut conn).wrap_neg()?; //Send intro message first
 
         read_header_expect_type(&mut conn, message_types::INTRO).wrap_neg()?; //Read intro header
         IntroMessage::read_into(&mut conn).wrap_neg()?;
@@ -59,7 +61,7 @@ impl Connection {
         send_capabilities(&mut conn, get_capabilities())?;
 
         let chosen_capabilities = read_capabilities(&mut conn)?;
-        let (_, _, msgc) = prune_capabilities(chosen_capabilities)?;
+        let msgc = get_msg_capabilities(chosen_capabilities)?;
 
         let alice_pk = read_public_key(&mut conn)?;
     
@@ -73,7 +75,7 @@ impl Connection {
 
         let (encrypter, decrypter) = create_crypters(&aes_key, &iv)?;
 
-        write_all(ConfirmationMessage, &mut conn).wrap_neg()?; //Send confirmation back.
+        ConfirmationMessage.write_all(&mut conn).wrap_neg()?; //Send confirmation back.
 
         
         Ok(Self{
@@ -90,14 +92,15 @@ impl Connection {
         read_header_expect_type(&mut conn, message_types::INTRO).wrap_neg()?; //Read intro header
         IntroMessage::read_into(&mut conn).wrap_neg()?;
 
-        write_all(IntroMessage, &mut conn).wrap_neg()?; //Send intro back
+        IntroMessage{}.write_all(&mut conn).wrap_neg()?; //Send intro back
 
         let bob_capabilities = read_capabilities(&mut conn)?;
-        let (pkc, skc, msgc) = prune_capabilities(bob_capabilities)?;
+        let msg_caps = get_msg_capabilities(bob_capabilities)?;
 
-        let mut using_capabilities = msgc.clone();
-        using_capabilities.push(pkc);
-        using_capabilities.push(skc);
+        let mut using_capabilities = msg_caps.clone();
+        using_capabilities.push(String::from(PKCRYPT_ALGO));
+        using_capabilities.push(String::from(SKCRYPT_ALGO));
+        using_capabilities.push(String::from(HASHING_ALGO));
 
         send_capabilities(&mut conn, using_capabilities)?; //Send capabilities back to bob.
 
@@ -116,20 +119,20 @@ impl Connection {
         
         let (encrypter, decrypter) = create_crypters(&aes_key, &iv)?;
 
-        read_header_expect_type(&mut conn, CONFIRMATION).wrap_neg()?; //Expect confirmation.
+        read_header_expect_type(&mut conn, message_types::CONFIRMATION).wrap_neg()?; //Expect confirmation.
         ConfirmationMessage::read_into(&mut conn).wrap_neg()?; //Read anyway even though this does nothing.
 
         Ok(Self{
             conn,
             encrypter,
             decrypter,
-            msg_capabilities: msgc
+            msg_capabilities: msg_caps
         })
     }
 
     pub fn has_msg_capability(&self, capability: &str) -> bool {
         for cap in &self.msg_capabilities {
-            if cap == capability {
+            if *cap == *capability {
                 return true;
             }
         }
@@ -143,7 +146,7 @@ impl Connection {
             length: data.len() as u64
         };
 
-        write_all(req, self).wrap_sme()?;
+        req.write_all(self).wrap_sme()?;
         
         read_header_expect_type(self, message_types::MSGRES).wrap_sme()?;
         let res = MessageResponse::read_into(self).wrap_sme()?;
@@ -162,7 +165,7 @@ impl Connection {
                     data: Some(rem_dat[..write_amount].to_vec())
                 };
 
-                write_all(chunk_msg, self).wrap_sme()?; //Send the chunk
+                chunk_msg.write_all(self).wrap_sme()?; //Send the chunk
 
                 read_header_expect_type(self, message_types::MSGACK).wrap_sme()?; //Wait for acknowledgement
                 let ack = MessageResponse::read_into(self).wrap_sme()?;
@@ -182,7 +185,7 @@ impl Connection {
     }
 
     pub fn reply_to_request(&mut self, accept: bool) -> Result<(), SessionMsgError> {
-        write_all(MessageResponse::new(accept, false), self).wrap_sme()
+        MessageResponse::new(accept, false).write_all(self).wrap_sme()
     }
 
     pub fn read_payload(&mut self, data: &mut [u8]) -> Result<(), SessionMsgError> {
@@ -198,10 +201,10 @@ impl Connection {
 
                 match data {
                     Some(_) => {
-                        write_all(MessageResponse::new(true, true), self).wrap_sme()?;
+                        MessageResponse::new(true, true).write_all(self).wrap_sme()?;
                     },
                     None => {
-                        write_all(MessageResponse::new(true, true), self).wrap_sme()?;
+                        MessageResponse::new(true, true).write_all(self).wrap_sme()?;
                     },
                 }
             }
@@ -285,9 +288,9 @@ fn read_header_expect_type<T: Read>(conn: &mut T, typ: u16) -> Result<() ,Messag
 }
 
 fn send_public_key(conn: &mut TcpStream, pk: PublicKey) -> Result<(), NegotiationError> {
-    write_all(KeyMessage { //Send public key
+    KeyMessage { //Send public key
         key: pk
-    }, conn).wrap_neg()
+    }.write_all(conn).wrap_neg()
 }
 
 fn read_public_key(conn: &mut TcpStream) -> Result<PublicKey, NegotiationError> {
@@ -301,13 +304,13 @@ fn perform_test(conn: &mut TcpStream, rng:&mut ThreadRng, their_pk: PublicKey) -
     rng.fill_bytes(&mut test_data);
     let encrypted_test_data = encrypt(&their_pk.serialize(), &test_data).wrap_neg()?;
     
-    write_all(TestMessage::new(encrypted_test_data, false), conn).wrap_neg()?;
+    TestMessage::new(encrypted_test_data, false).write_all(conn).wrap_neg()?;
 
     read_header_expect_type(conn, message_types::VALIDATION).wrap_neg()?;
     let test_result = TestMessage::read_into(conn).wrap_neg()?;
 
     if test_result.get_test_data() == test_data {
-        write_all(ConfirmationMessage, conn).wrap_neg()?;
+        ConfirmationMessage.write_all(conn).wrap_neg()?;
         return Ok(());
     } else {
         return Err(NegotiationError::FailedTest);
@@ -320,7 +323,7 @@ pub fn complete_test(conn: &mut TcpStream, sk: SecretKey) -> Result<(), Negotiat
 
     let decrypted_test = decrypt(&sk.serialize(), test.get_test_data()).wrap_neg()?;
 
-    write_all(TestMessage::new(decrypted_test, true), conn).wrap_neg()?;
+    TestMessage::new(decrypted_test, true).write_all(conn).wrap_neg()?;
 
     read_header_expect_type(conn, message_types::CONFIRMATION).wrap_neg()?; 
     ConfirmationMessage::read_into(conn).wrap_neg()?; //This 
@@ -329,7 +332,10 @@ pub fn complete_test(conn: &mut TcpStream, sk: SecretKey) -> Result<(), Negotiat
 }
 
 fn get_capabilities() -> Vec<String>{ //Returns all capabilities of my implementation.
-    let capability_strrefs = [SUPPORTED_PKCRYPT, SUPPORTED_SKCRYPT, SUPPORTED_MSG].concat();
+    let mut capability_strrefs = Vec::from(SUPPORTED_MSG);
+    capability_strrefs.push(PKCRYPT_ALGO);
+    capability_strrefs.push(SKCRYPT_ALGO);
+    capability_strrefs.push(HASHING_ALGO);
     let mut caps = Vec::<String>::with_capacity(capability_strrefs.len());
     for strref in capability_strrefs {
         caps.push(String::from(strref));
@@ -338,23 +344,11 @@ fn get_capabilities() -> Vec<String>{ //Returns all capabilities of my implement
     caps
 }
 
-fn prune_capabilities(caps: Vec<String>) -> Result<(String, String, Vec<String>), NegotiationError> { //Returns pk algorithm, sk algorithm and messaging capabilities in that order.
-    let mut pk_algo:Option<String> = None;
-    let mut sk_algo:Option<String> = None;
+fn get_msg_capabilities(caps: Vec<String>) -> Result<Vec<String>, NegotiationError> { //Returns pk algorithm, sk algorithm and messaging capabilities in that order.
     let mut msg_caps: Vec<String> = Vec::new();
 
-    for pkc in SUPPORTED_PKCRYPT {
-        let pkc_string = String::from(pkc);
-        if caps.contains(&pkc_string) {
-            pk_algo = Some(pkc_string);
-        }
-    } 
-
-    for skc in SUPPORTED_SKCRYPT {
-        let skc_string = String::from(skc);
-        if caps.contains(&skc_string) {
-            sk_algo = Some(skc_string);
-        }
+    if !caps.contains(&String::from(PKCRYPT_ALGO)) || !caps.contains(&String::from(SKCRYPT_ALGO)) || !caps.contains(&String::from(HASHING_ALGO)) {
+        return Err(NegotiationError::IncompatibleCapabilities);
     }
 
     for capability in caps {
@@ -362,29 +356,22 @@ fn prune_capabilities(caps: Vec<String>) -> Result<(String, String, Vec<String>)
             msg_caps.push(capability);
         }
     }
-
-    //Rust doesnt (yet?) support if let chains.
-    if let None = pk_algo {
-        return Err(NegotiationError::IncompatibleCapabilities);
-    } else if let None = sk_algo {
-        return Err(NegotiationError::IncompatibleCapabilities);
-    }
     if msg_caps.len() == 0 {
         return Err(NegotiationError::IncompatibleCapabilities);
     }
 
-    return Ok((pk_algo.unwrap(), sk_algo.unwrap(), msg_caps));
+    return Ok(msg_caps);
 }
 
 fn send_capabilities(conn: &mut TcpStream, caps: Vec<String>) -> Result<(), NegotiationError> {
-    write_all(CapabilityPrimer{
+    CapabilityPrimer{
         no_capabilities: caps.len() as u16 //risky.
-    }, conn).wrap_neg()?; //Send primer msg.
+    }.write_all(conn).wrap_neg()?; //Send primer msg.
 
     for cap in caps {
-        write_all(Capability {
+        Capability {
             name: cap
-        }, conn).wrap_neg()?;
+        }.write_all(conn).wrap_neg()?;
     }
 
     Ok(())
@@ -420,7 +407,7 @@ fn send_aes_key(conn: &mut TcpStream, other_pk: &PublicKey, my_sk: &SecretKey, a
         signature
     };
 
-    write_all(msg, conn).wrap_neg()?;
+    msg.write_all(conn).wrap_neg()?;
 
     Ok(())
 }

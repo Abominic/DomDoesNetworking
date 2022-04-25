@@ -10,10 +10,8 @@ const PORT:u16 = 30522;
 
 /*
 TODOS: Most important first.
- - MAKE SURE THAT MY COMPARISON METHODS (if ... == ...) ARE COMPARING VALUES NOT REFERENCES!!! (THIS IS VERY IMPORTANT.)
- - Update this to match details in Ideas doc and update anything unspecified in the ideas doc to match this.
- - Move write_all into the Messageable trait.
- - Make the sha256 hashing algorithm a capability.
+ - Make the app actually usable
+ - Make keys persistent (both mine and others').
  - Perhaps improve reading and writing making a function that writes the length then the data and a function that reads that information back beacuse I've written the same code like 1000 times.
  - Make message types an enum (this would be but i cba).
  - Make chunk sending not use .to_vec() which copies data and uses loads of RAM for large chunks.
