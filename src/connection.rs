@@ -1,9 +1,9 @@
-use std::{net::TcpStream, io::{Read, self}};
+use std::{net::TcpStream, io::{Read, self, Write}, cmp::min};
 use ecies::{utils::generate_keypair, SecretKey, PublicKey, encrypt, decrypt};
 use openssl::{sha::{sha256}, symm::{Cipher, Crypter}, error::ErrorStack};
 use rand::{RngCore, prelude::ThreadRng, Rng};
 use libsecp256k1::{sign, verify};
-use crate::{message::{Messageable, IntroMessage, message_types::{self, CONFIRMATION}, KeyMessage, TestMessage, ConfirmationMessage, MessageError, CapabilityPrimer, Capability, write_all, SecretKeyMessage}};
+use crate::{message::{Messageable, IntroMessage, message_types::{self, CONFIRMATION}, KeyMessage, TestMessage, ConfirmationMessage, MessageError, CapabilityPrimer, Capability, write_all, SecretKeyMessage, MessageRequest, WrapMessageError, MessageResponse, MessageChunk}};
 type KeyPair = (SecretKey, PublicKey);
 
 //Encryption Capabilities. In order of increasing priority. One from each to be picked.
@@ -11,6 +11,7 @@ const SUPPORTED_PKCRYPT: [&str; 1] = ["secp256k1"]; //This is unofficial. One wi
 const SUPPORTED_SKCRYPT:[&str; 1] = ["aes-256-ctr"]; 
 //Messaging Capabilities. 
 const SUPPORTED_MSG: [&str; 1] = ["text"];
+const MAX_CHUNK_SIZE:usize = 65535;
 pub struct Connection {
     conn: TcpStream,
     encrypter: Crypter,
@@ -25,7 +26,15 @@ pub enum NegotiationError{
     CorruptMessage,
     CryptoError,
     FailedTest,
-    IncompatibleCapabilities
+    IncompatibleCapabilities,
+}
+
+#[derive(Debug)]
+pub enum SessionMsgError {
+    NotCapable, //We don't have the capability.
+    Rejected, //Other side rejected the msg.
+    IOError,
+    CorruptMessageError,
 }
 
 impl Connection {
@@ -42,10 +51,10 @@ impl Connection {
     fn negotiate_bob(mut conn: TcpStream, kp: KeyPair) -> Result<Self, NegotiationError>{
         let mut rng = rand::thread_rng();
 
-        write_all(IntroMessage, &mut conn).wrap_io()?; //Send intro message first
+        write_all(IntroMessage, &mut conn).wrap_neg()?; //Send intro message first
 
-        read_header_expect_type(&mut conn, message_types::INTRO)?; //Read intro header
-        IntroMessage::read_into(&mut conn).wrap_io()?;
+        read_header_expect_type(&mut conn, message_types::INTRO).wrap_neg()?; //Read intro header
+        IntroMessage::read_into(&mut conn).wrap_neg()?;
 
         send_capabilities(&mut conn, get_capabilities())?;
 
@@ -64,8 +73,9 @@ impl Connection {
 
         let (encrypter, decrypter) = create_crypters(&aes_key, &iv)?;
 
-        write_all(ConfirmationMessage, &mut conn).wrap_io()?; //Send confirmation back.
+        write_all(ConfirmationMessage, &mut conn).wrap_neg()?; //Send confirmation back.
 
+        
         Ok(Self{
             conn,
             encrypter,
@@ -77,10 +87,10 @@ impl Connection {
     fn negotiate_alice(mut conn: TcpStream, kp: KeyPair) -> Result<Self, NegotiationError> {
         let mut rng = rand::thread_rng();
 
-        read_header_expect_type(&mut conn, message_types::INTRO)?; //Read intro header
-        IntroMessage::read_into(&mut conn).wrap_io()?;
+        read_header_expect_type(&mut conn, message_types::INTRO).wrap_neg()?; //Read intro header
+        IntroMessage::read_into(&mut conn).wrap_neg()?;
 
-        write_all(IntroMessage, &mut conn).wrap_io()?; //Send intro back
+        write_all(IntroMessage, &mut conn).wrap_neg()?; //Send intro back
 
         let bob_capabilities = read_capabilities(&mut conn)?;
         let (pkc, skc, msgc) = prune_capabilities(bob_capabilities)?;
@@ -106,8 +116,8 @@ impl Connection {
         
         let (encrypter, decrypter) = create_crypters(&aes_key, &iv)?;
 
-        read_header_expect_type(&mut conn, CONFIRMATION)?; //Expect confirmation.
-        ConfirmationMessage::read_into(&mut conn).wrap_io()?; //Read anyway even though this does nothing.
+        read_header_expect_type(&mut conn, CONFIRMATION).wrap_neg()?; //Expect confirmation.
+        ConfirmationMessage::read_into(&mut conn).wrap_neg()?; //Read anyway even though this does nothing.
 
         Ok(Self{
             conn,
@@ -116,27 +126,148 @@ impl Connection {
             msg_capabilities: msgc
         })
     }
+
+    pub fn has_msg_capability(&self, capability: &str) -> bool {
+        for cap in &self.msg_capabilities {
+            if cap == capability {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    pub fn send_message(&mut self, capability: &str, data: &[u8]) -> Result<(), SessionMsgError> {
+        let req = MessageRequest{
+            typ: String::from(capability),
+            length: data.len() as u64
+        };
+
+        write_all(req, self).wrap_sme()?;
+        
+        read_header_expect_type(self, message_types::MSGRES).wrap_sme()?;
+        let res = MessageResponse::read_into(self).wrap_sme()?;
+        if !res.ok() { //Message was rejected.
+            return Err(SessionMsgError::Rejected);
+        }
+
+        let mut rem_dat = &data[..]; //Create a slice of the remaining data to send with a mutable index so that I can reduce the size of it.
+        
+        while rem_dat.len() > 0 {
+            let write_amount: usize = min(rem_dat.len(), MAX_CHUNK_SIZE); //Amount to write, capped at the CHUNK size.
+
+            let mut chunk_recieved = false;
+            while !chunk_recieved {
+                let chunk_msg = MessageChunk{
+                    data: Some(rem_dat[..write_amount].to_vec())
+                };
+
+                write_all(chunk_msg, self).wrap_sme()?; //Send the chunk
+
+                read_header_expect_type(self, message_types::MSGACK).wrap_sme()?; //Wait for acknowledgement
+                let ack = MessageResponse::read_into(self).wrap_sme()?;
+
+                chunk_recieved = ack.ok();
+            }
+
+            rem_dat = &rem_dat[write_amount..];
+        }
+
+        Ok(())
+    }
+
+    pub fn read_next_msg_request(&mut self) -> Result<MessageRequest, SessionMsgError>{
+        read_header_expect_type(self, message_types::MSGREQ).wrap_sme()?; //Wait for request header
+        MessageRequest::read_into(self).wrap_sme() //Return message request
+    }
+
+    pub fn reply_to_request(&mut self, accept: bool) -> Result<(), SessionMsgError> {
+        write_all(MessageResponse::new(accept, false), self).wrap_sme()
+    }
+
+    pub fn read_payload(&mut self, data: &mut [u8]) -> Result<(), SessionMsgError> {
+        let mut rem_dat = data;
+
+        while rem_dat.len() > 0 {
+            read_header_expect_type(self, message_types::MSGCHNK).wrap_sme()?;
+            let mut data:Option<Vec<u8>> = None;
+
+            while let None = data {
+                let chunk = MessageChunk::read_into(self).wrap_sme()?;
+                data = chunk.data;
+
+                match data {
+                    Some(_) => {
+                        write_all(MessageResponse::new(true, true), self).wrap_sme()?;
+                    },
+                    None => {
+                        write_all(MessageResponse::new(true, true), self).wrap_sme()?;
+                    },
+                }
+            }
+            let data = data.unwrap();
+
+            
+            let data_len = data.len();
+            if data_len > rem_dat.len(){ //Throw an error if the data has overflowed.
+                return Err(SessionMsgError::CorruptMessageError);
+            }
+
+            rem_dat[..data_len].copy_from_slice(&data); //this could panic idk im so tired TODO: Make sure this definitely wont panic
+
+            rem_dat = &mut rem_dat[data_len..];
+        }
+
+        Ok(())
+    }
+}
+
+impl Write for Connection {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let mut encrypted = vec![0u8; buf.len()];
+        let bytes_encrypted = self.encrypter.update(buf, &mut encrypted)?;
+
+        self.conn.write(&encrypted[..bytes_encrypted])
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.conn.flush()
+    }
+}
+
+impl Read for Connection {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let mut encrypted = vec![0u8; buf.len()];
+        let bytes_read = self.conn.read(&mut encrypted)?;
+
+        let bytes_decrypted = self.decrypter.update(&encrypted[..bytes_read], buf)?;
+
+        Ok(bytes_decrypted)
+    }
 }
 
 fn create_crypters(key: &[u8; 32], iv: &[u8; 16]) -> Result<(Crypter, Crypter), NegotiationError>{
-    let encrypter = Crypter::new(
+    let mut encrypter = Crypter::new(
         Cipher::aes_256_ctr(),
         openssl::symm::Mode::Encrypt,
         key,
         Some(iv)
-    ).wrap_io()?;
+    ).wrap_neg()?;
 
-    let decrypter = Crypter::new(
+    let mut decrypter = Crypter::new(
         Cipher::aes_256_ctr(),
         openssl::symm::Mode::Decrypt,
         key,
         Some(iv)
-    ).wrap_io()?;
+    ).wrap_neg()?;
+    
+    encrypter.pad(false);
+    decrypter.pad(false);
 
     Ok((encrypter, decrypter))
 }
 
-fn read_type(conn: &mut TcpStream) -> io::Result<u16> { //Makes the connection read data and modify the state machine.
+fn read_type<T: Read>(conn: &mut T) -> io::Result<u16> { //Makes the connection read data and modify the state machine.
     let mut typ_bytes = [0u8; 2];
     conn.read_exact(&mut typ_bytes)?;
     let typ:u16 = u16::from_be_bytes(typ_bytes);
@@ -144,39 +275,39 @@ fn read_type(conn: &mut TcpStream) -> io::Result<u16> { //Makes the connection r
 }
 
 #[must_use]
-fn read_header_expect_type(conn: &mut TcpStream, typ: u16) -> Result<() ,NegotiationError> { //Returns the length or the error.
-    let actual_type = read_type(conn).wrap_io()?;
+fn read_header_expect_type<T: Read>(conn: &mut T, typ: u16) -> Result<() ,MessageError> { //Returns the length or the error.
+    let actual_type = read_type(conn).wrap_me()?;
     if actual_type == typ {
         Ok(())
     } else {
-        Err(NegotiationError::WrongMessageType)
+        Err(MessageError::WrongMessageType)
     }
 }
 
 fn send_public_key(conn: &mut TcpStream, pk: PublicKey) -> Result<(), NegotiationError> {
     write_all(KeyMessage { //Send public key
         key: pk
-    }, conn).wrap_io()
+    }, conn).wrap_neg()
 }
 
 fn read_public_key(conn: &mut TcpStream) -> Result<PublicKey, NegotiationError> {
-    read_header_expect_type(conn, message_types::PUBLICKEY)?;
-    let pk = KeyMessage::read_into(conn).wrap_io()?.key;
+    read_header_expect_type(conn, message_types::PUBLICKEY).wrap_neg()?;
+    let pk = KeyMessage::read_into(conn).wrap_neg()?.key;
     return Ok(pk);
 }
 
 fn perform_test(conn: &mut TcpStream, rng:&mut ThreadRng, their_pk: PublicKey) -> Result<(), NegotiationError> {
     let mut test_data = [0u8; 1028];
     rng.fill_bytes(&mut test_data);
-    let encrypted_test_data = encrypt(&their_pk.serialize(), &test_data).wrap_io()?;
+    let encrypted_test_data = encrypt(&their_pk.serialize(), &test_data).wrap_neg()?;
     
-    write_all(TestMessage::new(encrypted_test_data, false), conn).wrap_io()?;
+    write_all(TestMessage::new(encrypted_test_data, false), conn).wrap_neg()?;
 
-    read_header_expect_type(conn, message_types::VALIDATION)?;
-    let test_result = TestMessage::read_into(conn).wrap_io()?;
+    read_header_expect_type(conn, message_types::VALIDATION).wrap_neg()?;
+    let test_result = TestMessage::read_into(conn).wrap_neg()?;
 
     if test_result.get_test_data() == test_data {
-        write_all(ConfirmationMessage, conn).wrap_io()?;
+        write_all(ConfirmationMessage, conn).wrap_neg()?;
         return Ok(());
     } else {
         return Err(NegotiationError::FailedTest);
@@ -184,15 +315,15 @@ fn perform_test(conn: &mut TcpStream, rng:&mut ThreadRng, their_pk: PublicKey) -
 }
 
 pub fn complete_test(conn: &mut TcpStream, sk: SecretKey) -> Result<(), NegotiationError> {
-    read_header_expect_type(conn, message_types::TEST)?;
-    let test = TestMessage::read_into(conn).wrap_io()?;
+    read_header_expect_type(conn, message_types::TEST).wrap_neg()?;
+    let test = TestMessage::read_into(conn).wrap_neg()?;
 
-    let decrypted_test = decrypt(&sk.serialize(), test.get_test_data()).wrap_io()?;
+    let decrypted_test = decrypt(&sk.serialize(), test.get_test_data()).wrap_neg()?;
 
-    write_all(TestMessage::new(decrypted_test, true), conn).wrap_io()?;
+    write_all(TestMessage::new(decrypted_test, true), conn).wrap_neg()?;
 
-    read_header_expect_type(conn, message_types::CONFIRMATION)?; 
-    ConfirmationMessage::read_into(conn).wrap_io()?; //This 
+    read_header_expect_type(conn, message_types::CONFIRMATION).wrap_neg()?; 
+    ConfirmationMessage::read_into(conn).wrap_neg()?; //This 
 
     Ok(())
 }
@@ -248,25 +379,25 @@ fn prune_capabilities(caps: Vec<String>) -> Result<(String, String, Vec<String>)
 fn send_capabilities(conn: &mut TcpStream, caps: Vec<String>) -> Result<(), NegotiationError> {
     write_all(CapabilityPrimer{
         no_capabilities: caps.len() as u16 //risky.
-    }, conn).wrap_io()?; //Send primer msg.
+    }, conn).wrap_neg()?; //Send primer msg.
 
     for cap in caps {
         write_all(Capability {
             name: cap
-        }, conn).wrap_io()?;
+        }, conn).wrap_neg()?;
     }
 
     Ok(())
 }
 
 fn read_capabilities(conn: &mut TcpStream) -> Result<Vec<String>, NegotiationError>{
-    read_header_expect_type(conn, message_types::CAPPRIMER)?;
-    let cap_count = CapabilityPrimer::read_into(conn).wrap_io()?.no_capabilities;
+    read_header_expect_type(conn, message_types::CAPPRIMER).wrap_neg()?;
+    let cap_count = CapabilityPrimer::read_into(conn).wrap_neg()?.no_capabilities;
     
     let mut capabilities = Vec::<String>::with_capacity(cap_count as usize);
     for _ in 0..cap_count {
-        read_header_expect_type(conn, message_types::CAPABILITY)?;
-        let cap = Capability::read_into(conn).wrap_io()?.name;
+        read_header_expect_type(conn, message_types::CAPABILITY).wrap_neg()?;
+        let cap = Capability::read_into(conn).wrap_neg()?.name;
         capabilities.push(cap);
     }
 
@@ -282,22 +413,22 @@ fn send_aes_key(conn: &mut TcpStream, other_pk: &PublicKey, my_sk: &SecretKey, a
 
     let (signature, _) = sign(&libsecp256k1::Message::parse(&hashed), my_sk);
 
-    let keyiv = encrypt(&other_pk.serialize(), &plain_keyiv).wrap_io()?;
+    let keyiv = encrypt(&other_pk.serialize(), &plain_keyiv).wrap_neg()?;
 
     let msg = SecretKeyMessage{
         keyiv,
         signature
     };
 
-    write_all(msg, conn).wrap_io()?;
+    write_all(msg, conn).wrap_neg()?;
 
     Ok(())
 }
 
 fn read_aes_key(conn: &mut TcpStream, my_sk: &SecretKey, other_pk: &PublicKey) -> Result<([u8; 32], [u8; 16]), NegotiationError> {
-    read_header_expect_type(conn, message_types::SECRETKEY)?;
-    let skm = SecretKeyMessage::read_into(conn).wrap_io()?;
-    let keyiv = decrypt(&my_sk.serialize(), &skm.keyiv).wrap_io()?;
+    read_header_expect_type(conn, message_types::SECRETKEY).wrap_neg()?;
+    let skm = SecretKeyMessage::read_into(conn).wrap_neg()?;
+    let keyiv = decrypt(&my_sk.serialize(), &skm.keyiv).wrap_neg()?;
     
     let keyiv_hash = sha256(&keyiv);
 
@@ -315,11 +446,11 @@ fn read_aes_key(conn: &mut TcpStream, my_sk: &SecretKey, other_pk: &PublicKey) -
 }
 
 trait WrapNegotiationError<T> {
-    fn wrap_io(self) -> Result<T, NegotiationError>;
+    fn wrap_neg(self) -> Result<T, NegotiationError>;
 }
 
 impl<T> WrapNegotiationError<T> for io::Result<T> {
-    fn wrap_io(self) -> Result<T, NegotiationError> {
+    fn wrap_neg(self) -> Result<T, NegotiationError> {
         match self {
             Ok(res) => Ok(res),
             Err(_) => Err(NegotiationError::IOError),
@@ -328,7 +459,7 @@ impl<T> WrapNegotiationError<T> for io::Result<T> {
 }
 
 impl<T> WrapNegotiationError<T> for Result<T, MessageError> {
-    fn wrap_io(self) -> Result<T, NegotiationError> {
+    fn wrap_neg(self) -> Result<T, NegotiationError> {
         match self {
             Ok(res) => Ok(res),
             Err(err) => {
@@ -339,6 +470,7 @@ impl<T> WrapNegotiationError<T> for Result<T, MessageError> {
                     MessageError::IOError => {
                         Err(NegotiationError::IOError)
                     },
+                    MessageError::WrongMessageType => Err(NegotiationError::WrongMessageType),
                 }
             },
         }
@@ -346,7 +478,7 @@ impl<T> WrapNegotiationError<T> for Result<T, MessageError> {
 }
 
 impl<T> WrapNegotiationError<T> for Result<T, libsecp256k1::Error> {
-    fn wrap_io(self) -> Result<T, NegotiationError> {
+    fn wrap_neg(self) -> Result<T, NegotiationError> {
         match self {
             Ok(res) => Ok(res),
             Err(_) => Err(NegotiationError::CryptoError),
@@ -355,10 +487,30 @@ impl<T> WrapNegotiationError<T> for Result<T, libsecp256k1::Error> {
 }
 
 impl WrapNegotiationError<Crypter> for Result<Crypter, ErrorStack> {
-    fn wrap_io(self) -> Result<Crypter, NegotiationError> {
+    fn wrap_neg(self) -> Result<Crypter, NegotiationError> {
         match self {
             Ok(crypter) => Ok(crypter),
             Err(_) => Err(NegotiationError::CryptoError),
+        }
+    }
+}
+
+
+trait WrapSMError<T>{
+    fn wrap_sme(self) -> Result<T, SessionMsgError>;
+}
+
+impl<T> WrapSMError<T> for Result<T, MessageError> {
+    fn wrap_sme(self) -> Result<T, SessionMsgError> {
+        match self {
+            Ok(res) => Ok(res),
+            Err(err) => {
+                match err {
+                    MessageError::CorruptMessageError => Err(SessionMsgError::CorruptMessageError),
+                    MessageError::IOError => Err(SessionMsgError::IOError),
+                    MessageError::WrongMessageType => Err(SessionMsgError::CorruptMessageError),
+                }
+            },
         }
     }
 }
