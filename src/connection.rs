@@ -7,12 +7,12 @@ use crate::{message::{Messageable, IntroMessage, message_types, KeyMessage, Test
 type KeyPair = (SecretKey, PublicKey);
 
 //Encryption Capabilities. At the moment I am only supporting one algorithm for each task.
-const PKCRYPT_ALGO: &str = "secp256k1";
-const SKCRYPT_ALGO: &str = "aes-256-ctr"; 
-const HASHING_ALGO: &str = "sha256";
+const PKCRYPT_ALGO: &str = "secp256k1:0.0.1";
+const SKCRYPT_ALGO: &str = "aes-256-ctr:0.0.1"; 
+const HASHING_ALGO: &str = "sha256:0.0.1";
 
 //Messaging Capabilities. 
-const SUPPORTED_MSG: [&str; 1] = ["text"];
+const SUPPORTED_MSG: [&str; 1] = ["text:0.0.1"];
 const MAX_CHUNK_SIZE:usize = 65535;
 pub struct Connection {
     conn: TcpStream,

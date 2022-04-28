@@ -18,12 +18,10 @@ impl Session {
 
         self.conn.send_message("text", msg.as_bytes())?;
 
-        println!("You: {}", msg);
-
         Ok(())
     }
 
-    pub fn handle_next_message(&mut self) -> Result<(), SessionMsgError> {
+    pub fn get_next_message(&mut self) -> Result<String, SessionMsgError> {
         let req = self.conn.read_next_msg_request()?;
         if !self.conn.has_msg_capability(&req.typ){ //Reject the message.
             self.conn.reply_to_request(false)?;
@@ -39,8 +37,7 @@ impl Session {
 
             return match text {
                 Ok(text) => {
-                    println!("Them: {}", text);
-                    Ok(())
+                    Ok(text)
                 },
                 Err(_) => Err(SessionMsgError::CorruptMessageError),
             };
