@@ -10,10 +10,10 @@ pub const MAX_TEST_SIZE: usize = 65535;
 
 pub mod message_types {
     pub const INTRO:u16 = 0;
-    pub const PUBLICKEY:u16 = 1;
-    pub const TEST:u16 = 2;
-    pub const VALIDATION:u16 = 3;
-    pub const CONFIRMATION:u16 = 4;
+    pub const CONFIRMATION:u16 = 1;
+    pub const PUBLICKEY:u16 = 2;
+    pub const TEST:u16 = 3;
+    pub const VALIDATION:u16 = 4;
     pub const CAPPRIMER:u16 = 5;
     pub const CAPABILITY:u16 = 6;
     pub const SECRETKEY:u16 = 7;
