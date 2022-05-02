@@ -1,4 +1,4 @@
-use crate::connection::{Connection, SessionMsgError};
+use crate::connection::{Connection, SessionMsgError, TEXT_ALGO};
 
 pub struct Session {
     conn: Connection
@@ -12,11 +12,11 @@ impl Session {
     }
 
     pub fn send_text_msg(&mut self, msg: &str) -> Result<(), SessionMsgError> {
-        if !self.conn.has_msg_capability("text") {
+        if !self.conn.has_msg_capability(TEXT_ALGO) {
             return Err(SessionMsgError::NotCapable);
         }
 
-        self.conn.send_message("text", msg.as_bytes())?;
+        self.conn.send_message(TEXT_ALGO, msg.as_bytes())?;
 
         Ok(())
     }
@@ -30,7 +30,7 @@ impl Session {
 
         self.conn.reply_to_request(true)?;
         
-        if req.typ == "text" {
+        if req.typ == TEXT_ALGO {
             let mut text = vec![0u8; req.length as usize];
             self.conn.read_payload(&mut text)?;
             let text = String::from_utf8(text);

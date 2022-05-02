@@ -12,7 +12,8 @@ const SKCRYPT_ALGO: &str = "aes-256-ctr:0.0.1";
 const HASHING_ALGO: &str = "sha256:0.0.1";
 
 //Messaging Capabilities. 
-const SUPPORTED_MSG: [&str; 1] = ["text:0.0.1"];
+pub const TEXT_ALGO: &str = "text:0.0.1";
+const SUPPORTED_MSG: [&str; 1] = [TEXT_ALGO];
 const MAX_CHUNK_SIZE:usize = 65535;
 pub struct Connection {
     conn: TcpStream,
@@ -76,7 +77,7 @@ impl Connection {
         let (encrypter, decrypter) = create_crypters(&aes_key, &iv)?;
 
         ConfirmationMessage.write_all(&mut conn).wrap_neg()?; //Send confirmation back.
-
+        println!("Msg capabilities: {:?}", &msgc);
         
         Ok(Self{
             conn,
@@ -121,6 +122,7 @@ impl Connection {
 
         read_header_expect_type(&mut conn, message_types::CONFIRMATION).wrap_neg()?; //Expect confirmation.
         ConfirmationMessage::read_into(&mut conn).wrap_neg()?; //Read anyway even though this does nothing.
+        println!("Msg capabilities: {:?}", &msg_caps);
 
         Ok(Self{
             conn,
