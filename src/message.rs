@@ -49,6 +49,8 @@ pub trait Messageable {
 
     #[warn(unused_must_use)]
     fn write_all<V: Write>(&self, stream: &mut V) -> Result<(), MessageError>{
+        println!("Writing ID: {}", self.get_header_id());
+
         let header_bytes = self.get_header_id().to_be_bytes();
         stream.write(&header_bytes).wrap_me()?;
         self.write_out(stream)?;
@@ -424,7 +426,7 @@ impl Messageable for MessageChunk {
                 let hash = sha256(&data); //Using sha256 for now.
                 stream.write(&(hash.len() as u16).to_be_bytes()).wrap_me()?; //Write hash length.
                 stream.write(&hash).wrap_me()?; //Write hash.
-                stream.write(&(data.len() as u16).to_be_bytes()).wrap_me()?; //Write data length.
+                stream.write(&(data.len() as u64).to_be_bytes()).wrap_me()?; //Write data length.
                 stream.write(&data).wrap_me()?; //Write data.
         
                 Ok(())
@@ -439,9 +441,9 @@ impl Messageable for MessageChunk {
         let mut hash = vec![0u8; hash_len as usize];
         stream.read_exact(&mut hash).wrap_me()?;
         
-        let mut data_len = [0u8; 2];
+        let mut data_len = [0u8; 8];
         stream.read_exact(&mut data_len).wrap_me()?;
-        let data_len = u16::from_be_bytes(data_len);
+        let data_len = u64::from_be_bytes(data_len);
         let mut data = vec![0u8; data_len as usize];
         stream.read_exact(&mut data).wrap_me()?;
 
