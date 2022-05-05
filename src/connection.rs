@@ -43,11 +43,10 @@ pub enum SessionMsgError {
 impl Connection {
     pub fn negotiate(conn: TcpStream, incoming: bool) -> Result<Self, NegotiationError>{
         let kp = generate_keypair();
-
         if incoming {
-            Self::negotiate_bob(conn, kp)
-        } else {
             Self::negotiate_alice(conn, kp)
+        } else {
+            Self::negotiate_bob(conn, kp)
         }
     }
 
