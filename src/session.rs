@@ -1,7 +1,8 @@
-use crate::connection::{Connection, SessionMsgError, TEXT_ALGO};
+use chrono::{Local};
+use crate::connection::{Connection, SessionMsgError, TEXT_ALGO, CUSTOM_ALGO};
 
 pub struct Session {
-    conn: Connection
+    pub conn: Connection
 }
 
 impl Session {
@@ -17,6 +18,20 @@ impl Session {
         }
 
         self.conn.send_message(TEXT_ALGO, msg.as_bytes())?;
+
+        Ok(())
+    }
+
+    pub fn send_date_message(&mut self) -> Result<(), SessionMsgError> {
+        if !self.conn.has_msg_capability(CUSTOM_ALGO) {
+            return Err(SessionMsgError::NotCapable);
+        }
+
+        let time = Local::now();
+
+        println!("Time: {:?}", time.to_rfc2822());
+
+        self.conn.send_message(CUSTOM_ALGO, time.to_rfc3339().as_bytes())?;
 
         Ok(())
     }
@@ -41,6 +56,18 @@ impl Session {
                 },
                 Err(_) => Err(SessionMsgError::CorruptMessageError),
             };
+        } else if req.typ == CUSTOM_ALGO { //Date time.
+            let mut time_string = vec![0u8; req.length as usize];
+            self.conn.read_payload(&mut time_string)?;
+            let time_string = String::from_utf8(time_string);
+
+            return match time_string {
+                Ok(time_string) => {
+                    let output = format!("My time is {}", time_string); //TODO: print timezone.
+                    Ok(output)
+                },
+                Err(_) => Err(SessionMsgError::CorruptMessageError)
+            }
         } else {
             panic!("Somehow I accepted a message that I never bothered to write code to handle but still wrote the capability in anyway.");
         }

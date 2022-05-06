@@ -2,7 +2,7 @@ use std::{io::{self, stdin, BufRead, StdinLock, Lines, ErrorKind, stdout, Write}
 use connection::Connection;
 use session::Session;
 
-use crate::connection::NegotiationError;
+use crate::connection::{NegotiationError, CUSTOM_ALGO};
 
 mod message;
 mod connection;
@@ -18,6 +18,7 @@ enum ConnectionChoice {
 
 enum MessagingChoice {
     Send,
+    SendTime,
     Recieve,
     Disconnect
 }
@@ -117,10 +118,16 @@ fn main() {
         }
 
         'connection: loop {
-            let message_choice = menu_choices(&mut line_iter, "What would you like to do now?", &[
+            let mut choices = vec![
                 ("Send a message.", &MessagingChoice::Send),
                 ("Recieve a message.", &MessagingChoice::Recieve), 
-                ("Quit", &MessagingChoice::Disconnect)]);
+                ("Quit", &MessagingChoice::Disconnect)];
+
+            if session.conn.has_msg_capability(CUSTOM_ALGO) {
+                choices.insert(1, ("Send the current time.", &MessagingChoice::SendTime))
+            }
+
+            let message_choice = menu_choices(&mut line_iter, "What would you like to do now?", &choices);
     
             match message_choice {
                 MessagingChoice::Send => {
@@ -133,6 +140,15 @@ fn main() {
                         },
                     }
 
+                },
+                MessagingChoice::SendTime => {
+                    match session.send_date_message(){
+                        Ok(_) => {},
+                        Err(err) => {
+                            println!("Failed to send date: {:?}. Disconnecting.", err);
+                            break 'connection;
+                        },
+                    }
                 },
                 MessagingChoice::Recieve => {
                     let possible_msg = session.get_next_message();
