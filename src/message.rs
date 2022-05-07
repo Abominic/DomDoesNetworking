@@ -1,4 +1,4 @@
-use std::{io::{self, Read, Write}, panic};
+use std::{io::{self, Read, Write}, panic, thread, time::Duration};
 use ecies::{PublicKey};
 use libsecp256k1::{PublicKeyFormat, Signature};
 use openssl::sha::sha256;
@@ -49,6 +49,9 @@ pub trait Messageable {
 
     #[warn(unused_must_use)]
     fn write_all<V: Write>(&self, stream: &mut V) -> Result<(), MessageError>{
+        let sleep_time = Duration::from_millis(250);
+        thread::sleep(sleep_time);
+
         println!("Writing ID: {}", self.get_header_id());
 
         let header_bytes = self.get_header_id().to_be_bytes();
