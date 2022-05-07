@@ -13,7 +13,8 @@ const HASHING_ALGO: &str = "sha256:0.0.1";
 
 //Messaging Capabilities. 
 pub const TEXT_ALGO: &str = "text:0.0.1";
-const SUPPORTED_MSG: [&str; 1] = [TEXT_ALGO];
+pub const CUSTOM_ALGO: &str = "localtime:0.0.1"; //A capability which allows you to send your local time.
+const SUPPORTED_MSG: [&str; 2] = [TEXT_ALGO, CUSTOM_ALGO];
 const MAX_CHUNK_SIZE:usize = 65535;
 pub struct Connection {
     conn: TcpStream,
@@ -43,11 +44,10 @@ pub enum SessionMsgError {
 impl Connection {
     pub fn negotiate(conn: TcpStream, incoming: bool) -> Result<Self, NegotiationError>{
         let kp = generate_keypair();
-
         if incoming {
-            Self::negotiate_bob(conn, kp)
-        } else {
             Self::negotiate_alice(conn, kp)
+        } else {
+            Self::negotiate_bob(conn, kp)
         }
     }
 
