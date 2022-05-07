@@ -242,8 +242,14 @@ impl Messageable for Capability {
         }
 
         let length = self.name.len() as u8;
-        stream.write(&[length]).wrap_me()?;
-        stream.write(self.name.as_bytes()).wrap_me()?;
+        let mut  data = Vec::<u8>::with_capacity((length+1) as usize);
+        data.push(length);
+        data.extend_from_slice(self.name.as_bytes());
+
+        stream.write(&data).wrap_me()?;
+
+        // stream.write(&[length]).wrap_me()?;
+        // stream.write(self.name.as_bytes()).wrap_me()?;
         Ok(())
     }
 
