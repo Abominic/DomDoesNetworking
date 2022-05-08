@@ -49,7 +49,6 @@ pub trait Messageable {
 
     #[warn(unused_must_use)]
     fn write_all<V: Write>(&self, stream: &mut V) -> Result<(), MessageError>{
-        println!("Writing ID: {}", self.get_header_id());
 
         let header_bytes = self.get_header_id().to_be_bytes();
         stream.write(&header_bytes).wrap_me()?;

@@ -77,7 +77,6 @@ impl Connection {
         let (encrypter, decrypter) = create_crypters(&aes_key, &iv)?;
 
         ConfirmationMessage.write_all(&mut conn).wrap_neg()?; //Send confirmation back.
-        println!("Msg capabilities: {:?}", &msgc);
         
         Ok(Self{
             conn,
@@ -122,7 +121,6 @@ impl Connection {
 
         read_header_expect_type(&mut conn, message_types::CONFIRMATION).wrap_neg()?; //Expect confirmation.
         ConfirmationMessage::read_into(&mut conn).wrap_neg()?; //Read anyway even though this does nothing.
-        println!("Msg capabilities: {:?}", &msg_caps);
 
         Ok(Self{
             conn,
