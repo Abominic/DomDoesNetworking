@@ -68,6 +68,7 @@ impl Messageable for IntroMessage {
     #[warn(unused_must_use)] //This does not do anything maybe it will in the future but Rust is still working this one out. https://github.com/rust-lang/rust/issues/55506 https://github.com/rust-lang/rust/issues/67387
     fn write_out<T: Write>(&self, stream:&mut T) -> Result<(), MessageError>{
         stream.write(HEARTBEAT_MESSAGE.as_bytes()).wrap_me()?;
+        println!("Sent intro message.");
         Ok(())
     }
 
@@ -76,6 +77,7 @@ impl Messageable for IntroMessage {
         let mut p2pem_buffer = [0u8; 5];
         stream.read_exact(&mut p2pem_buffer).wrap_me()?;
         if p2pem_buffer == HEARTBEAT_MESSAGE.as_bytes() {
+            println!("Successfully recieved intro message (P2PEM protocol confirmed).");
             Ok(IntroMessage)
         } else {
             Err(MessageError::CorruptMessageError)
@@ -209,6 +211,7 @@ impl Messageable for CapabilityPrimer {
     fn write_out<T: Write>(&self, stream:&mut T) -> Result<(), MessageError> {
         let number = self.no_capabilities.to_be_bytes();
         stream.write(&number).wrap_me()?;
+        println!("Sent capability primer of size {}.", &self.no_capabilities);
         Ok(())
     }
 
@@ -216,6 +219,7 @@ impl Messageable for CapabilityPrimer {
         let mut number = [0u8; 2];
         stream.read_exact(&mut number).wrap_me()?;
         let number = u16::from_be_bytes(number);
+        println!("Recieved capability primer of size {}.", &number);
 
         Ok(CapabilityPrimer{
             no_capabilities: number
@@ -240,6 +244,7 @@ impl Messageable for Capability {
         let length = self.name.len() as u8;
         stream.write(&[length]).wrap_me()?;
         stream.write(self.name.as_bytes()).wrap_me()?;
+        println!("Sent capability \"{}\".", &self.name);
         Ok(())
     }
 
@@ -252,6 +257,7 @@ impl Messageable for Capability {
 
         match possible_name {
             Ok(name) => {
+                println!("Received capability \"{}\".", &name);
                 return Ok(Capability {
                     name
                 });

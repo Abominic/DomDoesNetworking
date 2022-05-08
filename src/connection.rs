@@ -303,8 +303,10 @@ fn perform_test(conn: &mut TcpStream, rng:&mut ThreadRng, their_pk: PublicKey) -
     let mut test_data = [0u8; 1028];
     rng.fill_bytes(&mut test_data);
     let encrypted_test_data = encrypt(&their_pk.serialize(), &test_data).wrap_neg()?;
+    println!("Sending test data. Plain Hash: {}, Encrypted Hash: {}.", hex::encode(sha256(&test_data)), hex::encode(sha256(&encrypted_test_data))); //Print out encrypted and plain data.
     
     TestMessage::new(encrypted_test_data, false).write_all(conn).wrap_neg()?;
+
 
     read_header_expect_type(conn, message_types::VALIDATION).wrap_neg()?;
     let test_result = TestMessage::read_into(conn).wrap_neg()?;
@@ -322,6 +324,9 @@ pub fn complete_test(conn: &mut TcpStream, sk: SecretKey) -> Result<(), Negotiat
     let test = TestMessage::read_into(conn).wrap_neg()?;
 
     let decrypted_test = decrypt(&sk.serialize(), test.get_test_data()).wrap_neg()?;
+
+
+    println!("Recieved test data. Hash: {}, Decrypted Hash: {}.", hex::encode(sha256(test.get_test_data())), hex::encode(sha256(&decrypted_test))); //Print out result of decryption.
 
     TestMessage::new(decrypted_test, true).write_all(conn).wrap_neg()?;
 
@@ -395,6 +400,8 @@ fn send_aes_key(conn: &mut TcpStream, other_pk: &PublicKey, my_sk: &SecretKey, a
     let mut plain_keyiv = [0u8; 48];
     plain_keyiv[..32].copy_from_slice(aes_key);
     plain_keyiv[32..].copy_from_slice(iv);
+
+    println!("Sending AES Key and Initialisation Vector: {}.", hex::encode(plain_keyiv));
     
     let hashed = sha256(&plain_keyiv);
 
@@ -426,6 +433,8 @@ fn read_aes_key(conn: &mut TcpStream, my_sk: &SecretKey, other_pk: &PublicKey) -
         key.copy_from_slice(&keyiv[..32]);
         iv.copy_from_slice(&keyiv[32..]);
 
+
+        println!("Recieved AES Key and Initialisation Vector: {}.", hex::encode(keyiv));
         return Ok((key, iv));
     } else {
         return Err(NegotiationError::CryptoError);
