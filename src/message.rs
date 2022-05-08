@@ -423,9 +423,10 @@ impl Messageable for MessageChunk {
             None => {panic!("Message that was read was rewritten. This should not happen!");},
             Some(data) => {
                 let hash = sha256(&data); //Using sha256 for now.
-                stream.write(&(hash.len() as u16).to_be_bytes()).wrap_me()?; //Write hash length.
-                stream.write(&hash).wrap_me()?; //Write hash.
+                //Removed because this is no longer on the protocol spec.
+                //stream.write(&(hash.len() as u16).to_be_bytes()).wrap_me()?; //Write hash length.
                 stream.write(&(data.len() as u64).to_be_bytes()).wrap_me()?; //Write data length.
+                stream.write(&hash).wrap_me()?; //Write hash.
                 stream.write(&data).wrap_me()?; //Write data.
         
                 Ok(())
@@ -434,15 +435,17 @@ impl Messageable for MessageChunk {
     }
 
     fn read_into<T: Read>(stream: &mut T) -> Result<Self, MessageError> where Self: Sized { //almost there...
-        let mut hash_len = [0u8; 2];
-        stream.read_exact(&mut hash_len).wrap_me()?;
-        let hash_len = u16::from_be_bytes(hash_len);
-        let mut hash = vec![0u8; hash_len as usize];
-        stream.read_exact(&mut hash).wrap_me()?;
-        
+        //let mut hash_len = [0u8; 2];
+        //stream.read_exact(&mut hash_len).wrap_me()?;
+        //let hash_len = u16::from_be_bytes(hash_len);
+
+        const HASH_LEN:usize = 32; //Replaced with constant hash length.
+
         let mut data_len = [0u8; 8];
         stream.read_exact(&mut data_len).wrap_me()?;
         let data_len = u64::from_be_bytes(data_len);
+        let mut hash = vec![0u8; HASH_LEN];
+        stream.read_exact(&mut hash).wrap_me()?;
         let mut data = vec![0u8; data_len as usize];
         stream.read_exact(&mut data).wrap_me()?;
 
