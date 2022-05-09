@@ -1,8 +1,6 @@
 # P2PEM
+
 Written in Rust.
-Code is very messy.
+Code is very messy so please don't judge 🥺.
 
-My implementation of our P2PEM protocol. <br>
-So far this is very basic and needs more work and the message IDs need changing to match the RFC.
-Currently this only communicates with itself so its very simple.
-
+Please note that this will use the default port of 30522 at 0.0.0.0. If it is taken, then it will increase by one until it finds an available port.

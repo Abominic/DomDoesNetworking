@@ -34,6 +34,7 @@ TODOS: Most important first.
  - MAYBE fix the horrific error system I have in place or let other people know how messy it is.
  */
 fn main() {
+    
     let mut using_port = PORT;
     let mut listener:Option<TcpListener> = None;
     while let None = listener {
@@ -177,28 +178,26 @@ fn menu_choices<'a, T>(iter: &mut Lines<StdinLock>, prompt: &str, choices: &'a [
             println!("\t{0}: {1}", i, *c);
         }
 
-        let line = iter.next();
-        if let Some(line) = line {
-            match line {
-                Ok(opt) => {
-                    let possible_choice = opt.parse::<usize>();
-                    match possible_choice {
-                        Ok(choice) => {
-                            if choice < choices.len() {
-                                return choices[choice].1;
-                            } else {
-                                println!("Please enter a valid choice.");
-                            }
-                        },
-                        Err(_) => {
-                            println!("Please enter a number that corresponds to a choice.");
-                        },
-                    }
-                },
-                Err(_) => {
-                    println!("Failed to read line! Please try again.");
-                },
-            }
+        let line = iter.next().expect("Error: STDIN closed.");
+        match line {
+            Ok(opt) => {
+                let possible_choice = opt.parse::<usize>();
+                match possible_choice {
+                    Ok(choice) => {
+                        if choice < choices.len() {
+                            return choices[choice].1;
+                        } else {
+                            println!("Please enter a valid choice.");
+                        }
+                    },
+                    Err(_) => {
+                        println!("Please enter a number that corresponds to a choice.");
+                    },
+                }
+            },
+            Err(_) => {
+                println!("Failed to read line! Please try again.");
+            },
         }
     }
 }
@@ -206,29 +205,27 @@ fn menu_choices<'a, T>(iter: &mut Lines<StdinLock>, prompt: &str, choices: &'a [
 fn connect_ip(lines: &mut Lines<StdinLock>) -> io::Result<TcpStream> {
     loop {
         println!("Please enter an IP address to connect to.");
-        let line = lines.next();
-        if let Some(line) = line {
-            match line {
-                Ok(possible_ip) => {
-                    let conn = TcpStream::connect(possible_ip);
-                    match conn {
-                        Ok(conn) => return Ok(conn),
-                        Err(err) => {
-                            let kind = err.kind();
-                            match kind {
-                                ErrorKind::InvalidInput => {
-                                    println!("Please enter a valid IP address.");
-                                    continue; //Reset loop
-                                }
-                                _ => {
-                                    return Err(err);
-                                }
+        let line = lines.next().expect("Error: STDIN closed.");
+        match line {
+            Ok(possible_ip) => {
+                let conn = TcpStream::connect(possible_ip);
+                match conn {
+                    Ok(conn) => return Ok(conn),
+                    Err(err) => {
+                        let kind = err.kind();
+                        match kind {
+                            ErrorKind::InvalidInput => {
+                                println!("Please enter a valid IP address.");
+                                continue; //Reset loop
                             }
-                        },
-                    }
-                },
-                Err(_) => println!("Failed to read line."),
-            }
+                            _ => {
+                                return Err(err);
+                            }
+                        }
+                    },
+                }
+            },
+            Err(_) => println!("Failed to read line."),
         }
     }
 }
