@@ -1,4 +1,4 @@
-use std::{net::TcpStream, io::{Read, self, Write}, cmp::min};
+use std::{net::TcpStream, io::{Read, self, Write}, cmp::min, string::FromUtf8Error};
 use ecies::{utils::generate_keypair, SecretKey, PublicKey, encrypt, decrypt};
 use openssl::{sha::{sha256}, symm::{Cipher, Crypter}, error::ErrorStack};
 use rand::{RngCore, prelude::ThreadRng, Rng};
@@ -496,7 +496,7 @@ impl WrapNegotiationError<Crypter> for Result<Crypter, ErrorStack> {
 }
 
 
-trait WrapSMError<T>{
+pub trait WrapSMError<T>{
     fn wrap_sme(self) -> Result<T, SessionMsgError>;
 }
 
@@ -510,6 +510,19 @@ impl<T> WrapSMError<T> for Result<T, MessageError> {
                     MessageError::IOError => Err(SessionMsgError::IOError),
                     MessageError::WrongMessageType => Err(SessionMsgError::CorruptMessageError),
                 }
+            },
+        }
+    }
+}
+
+impl<T> WrapSMError<T> for Result<T, FromUtf8Error> {
+    fn wrap_sme(self) -> Result<T, SessionMsgError> {
+        match self {
+            Ok(res) => {
+                Ok(res)
+            }
+            Err(_) => {
+                Err(SessionMsgError::CorruptMessageError)
             },
         }
     }
