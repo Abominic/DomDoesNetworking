@@ -1,5 +1,5 @@
-use chrono::{Local};
-use crate::connection::{Connection, SessionMsgError, TEXT_ALGO, CUSTOM_ALGO};
+use chrono::{Local, DateTime};
+use crate::connection::{Connection, SessionMsgError, TEXT_ALGO, CUSTOM_ALGO, WrapSMError};
 
 pub struct Session {
     pub conn: Connection
@@ -59,11 +59,12 @@ impl Session {
         } else if req.typ == CUSTOM_ALGO { //Date time.
             let mut time_string = vec![0u8; req.length as usize];
             self.conn.read_payload(&mut time_string)?;
-            let time_string = String::from_utf8(time_string);
-
+            let time_string = String::from_utf8(time_string).wrap_sme()?;
+            let time_string = DateTime::parse_from_rfc3339(&time_string);
+            
             return match time_string {
                 Ok(time_string) => {
-                    let output = format!("My time is {}", time_string); //TODO: print timezone.
+                    let output = format!("My time is {}!", time_string.to_rfc2822()); //TODO: print timezone.
                     Ok(output)
                 },
                 Err(_) => Err(SessionMsgError::CorruptMessageError)
