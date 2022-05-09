@@ -230,6 +230,8 @@ impl Write for Connection {
         let mut encrypted = vec![0u8; buf.len()];
         let bytes_encrypted = self.encrypter.update(buf, &mut encrypted)?;
 
+        println!("Encrypting data. Plain: {}, Encrypted: {}", hex::encode_upper(&buf), hex::encode_upper(&encrypted[..bytes_encrypted]));
+
         self.conn.write(&encrypted[..bytes_encrypted])
     }
 
@@ -244,6 +246,8 @@ impl Read for Connection {
         let bytes_read = self.conn.read(&mut encrypted)?;
 
         let bytes_decrypted = self.decrypter.update(&encrypted[..bytes_read], buf)?;
+
+        println!("Decrypted data. Encrypted: {}, Plain: {}", hex::encode_upper(&encrypted[..bytes_read]), hex::encode_upper(&buf[..bytes_decrypted]));
 
         Ok(bytes_decrypted)
     }
